@@ -71,6 +71,7 @@ public class ShaderCompilers {
                         shaderLanguages.add(ShaderDesc.Language.LANGUAGE_GLES_SM300);
                         shaderLanguages.add(ShaderDesc.Language.LANGUAGE_GLES_SM100);
                     }
+                    shaderLanguages.add(ShaderDesc.Language.LANGUAGE_WGSL);
                     spirvSupported = false;
                 } break;
                 case Arm64NX64:
