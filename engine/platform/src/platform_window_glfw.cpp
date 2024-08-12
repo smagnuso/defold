@@ -267,6 +267,7 @@ namespace dmPlatform
             case PLATFORM_GRAPHICS_API_OPENGL:
                 res = OpenWindowOpenGL(window, params);
                 break;
+            case PLATFORM_GRAPHICS_API_WEBGPU:
             case PLATFORM_GRAPHICS_API_VULKAN:
                 res = OpenWindowVulkan(window, params);
                 break;
