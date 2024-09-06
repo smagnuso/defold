@@ -226,6 +226,7 @@ namespace dmEngine
     , m_MainCollection(0)
     , m_LastReloadMTime(0)
     , m_MouseSensitivity(1.0f)
+    , m_ProjectFileURI("")
     , m_GraphicsContext(0)
     , m_RenderContext(0)
     , m_SharedScriptContext(0x0)
@@ -609,356 +610,10 @@ namespace dmEngine
             return;
         }
         engine->m_GraphicsContext = graphicsContext;
-    }
 
-    /*
-     The game.projectc is located using the following scheme:
-
-     A.
-      1. If an argument is specified load the game.project from specified file
-     B.
-      1. Look for game.project (relative path)
-      2. Look for build/default/game.projectc (relative path)
-      3. Look for dmSys::GetResourcePath()/game.project
-      4. Load first game.project-file found. If none is
-         found start the built-in connect application
-
-      The content-root is set to the directory name of
-      the project if not overridden in project-file
-      (resource.uri)
-    */
-    bool Init(HEngine engine, int argc, char *argv[])
-    {
-        dmLogInfo("Defold Engine %s (%.7s)", dmEngineVersion::VERSION, dmEngineVersion::VERSION_SHA1);
-
-        dmCrash::SetExtraInfoCallback(CrashHandlerCallback, engine);
-
-        dmSys::EngineInfoParam engine_info;
-        engine_info.m_Platform = dmEngineVersion::PLATFORM;
-        engine_info.m_Version = dmEngineVersion::VERSION;
-        engine_info.m_VersionSHA1 = dmEngineVersion::VERSION_SHA1;
-        engine_info.m_IsDebug = dLib::IsDebugMode();
-        dmSys::SetEngineInfo(engine_info);
-
-        char* qoe_s = dmSys::GetEnv("DM_QUIT_ON_ESC");
-        engine->m_QuitOnEsc = ((qoe_s != 0x0) && (qoe_s[0] == '1'));
-
-        char project_file[DMPATH_MAX_PATH] = "";
-        char project_file_uri[DMPATH_MAX_PATH] = "";
-        char project_file_folder[DMPATH_MAX_PATH] = ".";
-        bool loaded_ok = false;
-
-        char resources_path[DMPATH_MAX_PATH];
-        dmSys::GetResourcesPath(argc, argv, resources_path, sizeof(resources_path));
-
-        if (GetProjectFile(argc, argv, resources_path, project_file, sizeof(project_file)))
-        {
-            dmConfigFile::Result cr = dmConfigFile::Load(project_file, argc, (const char**) argv, &engine->m_Config);
-            if (cr != dmConfigFile::RESULT_OK)
-            {
-                if (!engine->m_ConnectionAppMode)
-                {
-                    dmLogFatal("Unable to load project file: '%s' (%d)", project_file, cr);
-                    return false;
-                }
-                dmLogError("Unable to load project file: '%s' (%d)", project_file, cr);
-            }
-            else
-            {
-                loaded_ok = true;
-                dmPath::Dirname(project_file, project_file_folder, sizeof(project_file_folder));
-                dmStrlCpy(project_file_uri, project_file_folder, sizeof(project_file_uri));
-
-                char tmp[DMPATH_MAX_PATH];
-                dmStrlCpy(tmp, project_file_folder, sizeof(tmp));
-                if (project_file_folder[0])
-                {
-                    dmStrlCat(tmp, "/game.dmanifest", sizeof(tmp));
-                }
-                else
-                {
-                    dmStrlCat(tmp, "game.dmanifest", sizeof(tmp));
-                }
-                if (dmSys::ResourceExists(tmp))
-                {
-                    dmStrlCpy(project_file_uri, "archive:", sizeof(project_file_uri));
-                    dmStrlCat(project_file_uri, tmp, sizeof(project_file_uri));
-                }
-            }
-        }
-
-        if( !loaded_ok )
-        {
-#if defined(DM_RELEASE)
-            dmLogFatal("Unable to load project");
-            return false;
-#else
-            dmConfigFile::Result cr = dmConfigFile::LoadFromBuffer((const char*) GAME_PROJECT, GAME_PROJECT_SIZE, argc, (const char**) argv, &engine->m_Config);
-            if (cr != dmConfigFile::RESULT_OK)
-            {
-                dmLogFatal("Unable to load builtin connect project");
-                return false;
-            }
-            engine->m_ConnectionAppMode = true;
-#endif
-        }
-
-        // Try loading SSL keys
-        char engine_ssl_keys_path[DMPATH_MAX_PATH];
-        dmPath::Concat(resources_path, "/ssl_keys.pem", engine_ssl_keys_path, sizeof(engine_ssl_keys_path));
-        char editor_ssl_keys_path[DMPATH_MAX_PATH];
-        const char* custom_ssl_certificate = dmConfigFile::GetString(engine->m_Config, "network.ssl_certificates", 0);
-        if (custom_ssl_certificate != 0)
-        {
-            dmPath::Concat(project_file_folder, custom_ssl_certificate, editor_ssl_keys_path, sizeof(editor_ssl_keys_path));
-        }
-
-        const char* paths[] = {engine_ssl_keys_path, custom_ssl_certificate != 0 ? editor_ssl_keys_path : 0};
-        for (uint32_t i = 0; i < DM_ARRAY_SIZE(paths); ++i)
-        {
-            if (paths[i] && LoadAndSetSslKeys(paths[i]))
-            {
-                dmLogInfo("SSL verification enabled");
-                break;
-            }
-        }
-
-        // Set HTML5 console banner "MadeWithDefold"
-        #if defined(__EMSCRIPTEN__)
-        if (1 == dmConfigFile::GetInt(engine->m_Config, "html5.show_console_banner", 1))
-        {
-            EM_ASM({
-                if (navigator.userAgent.toLowerCase().indexOf('chrome') > -1) {
-                    console.log("%c    %c    Made with Defold    %c    %c    https://www.defold.com",
-                        "background: #fd6623; padding:5px 0; border: 5px;",
-                        "background: #272c31; color: #fafafa; padding:5px 0;",
-                        "background: #39a3e4; padding:5px 0;",
-                        "background: #ffffff; color: #000000; padding:5px 0;"
-                    );
-                }
-                else {
-                    console.log("Made with Defold -=[ https://www.defold.com ]=-");
-                }
-            });
-        }
-        #endif
-
-        // Catch engine specific arguments
-        bool verify_graphics_calls = dLib::IsDebugMode();
-
-        // The default is 1, and the only way to know if the property is manually set, is if it's 0
-        // since the values are always written to the project file
-        if (0 == dmConfigFile::GetInt(engine->m_Config, "graphics.verify_graphics_calls", 1))
-            verify_graphics_calls = false;
-
-        bool renderdoc_support = false;
-        bool use_validation_layers = false;
-        const char verify_graphics_calls_arg[] = "--verify-graphics-calls=";
-        const char renderdoc_support_arg[] = "--renderdoc";
-        const char validation_layers_support_arg[] = "--use-validation-layers";
-        const char verbose_long[] = "--verbose";
-        const char verbose_short[] = "-v";
-        for (int i = 0; i < argc; ++i)
-        {
-            const char* arg = argv[i];
-            if (strncmp(verify_graphics_calls_arg, arg, sizeof(verify_graphics_calls_arg)-1) == 0)
-            {
-                const char* eq = strchr(arg, '=');
-                if (strncmp("true", eq+1, sizeof("true")-1) == 0) {
-                    verify_graphics_calls = true;
-                } else if (strncmp("false", eq+1, sizeof("false")-1) == 0) {
-                    verify_graphics_calls = false;
-                } else {
-                    dmLogWarning("Invalid value used for %s%s.", verify_graphics_calls_arg, eq);
-                }
-            }
-            else if (strncmp(renderdoc_support_arg, arg, sizeof(renderdoc_support_arg)-1) == 0)
-            {
-                renderdoc_support = true;
-            }
-            else if (strncmp(validation_layers_support_arg, arg, sizeof(validation_layers_support_arg)-1) == 0)
-            {
-                use_validation_layers = true;
-            }
-            else if (strncmp(verbose_long, arg, sizeof(verbose_long)-1) == 0 ||
-                     strncmp(verbose_short, arg, sizeof(verbose_short)-1) == 0)
-            {
-                dmLogSetLevel(LOG_SEVERITY_DEBUG);
-            }
-        }
-
-        dmBuffer::NewContext();
-
-        dmHID::NewContextParams new_hid_params = dmHID::NewContextParams();
-
-        // Accelerometer
-        int32_t use_accelerometer = dmConfigFile::GetInt(engine->m_Config, "input.use_accelerometer", 1);
-        new_hid_params.m_IgnoreAcceleration = use_accelerometer ? 0 : 1;
-
-#if defined(__EMSCRIPTEN__)
-        // DEF-2450 Reverse scroll direction for firefox browser
-        dmSys::SystemInfo info;
-        dmSys::GetSystemInfo(&info);
-        if (info.m_UserAgent != 0x0)
-        {
-            const char* str_firefox = "firefox";
-            new_hid_params.m_FlipScrollDirection = (strcasestr(info.m_UserAgent, str_firefox) != NULL) ? 1 : 0;
-        }
-#endif
-        engine->m_HidContext = dmHID::NewContext(new_hid_params);
-
-        dmEngine::ExtensionAppParams app_params;
-        app_params.m_ConfigFile = engine->m_Config;
-        app_params.m_WebServer = dmEngineService::GetWebServer(engine->m_EngineService);
-        app_params.m_GameObjectRegister = engine->m_Register;
-        app_params.m_HIDContext = engine->m_HidContext;
-
-        dmExtension::Result er = dmExtension::AppInitialize((dmExtension::AppParams*)&app_params);
-        if (er != dmExtension::RESULT_OK) {
-            dmLogFatal("Failed to initialize extensions (%d)", er);
-            return false;
-        }
-
-        int instance_index = 0;
-#if !defined(DM_RELEASE)
-        instance_index = dmConfigFile::GetInt(engine->m_Config, "project.instance_index", 0);
-#endif
-        int write_log = dmConfigFile::GetInt(engine->m_Config, "project.write_log", 0);
-        if (write_log) {
-            uint32_t count = 0;
-            char* log_paths[3];
-
-            char log_file_name[32] = "log.txt";
-            if (instance_index > 0)
-            {
-                dmSnPrintf(log_file_name, sizeof(log_file_name), "instance_%d_log.txt", instance_index);
-            }
-
-            const char* log_dir = dmConfigFile::GetString(engine->m_Config, "project.log_dir", NULL);
-            char log_config_path[DMPATH_MAX_PATH];
-            if (log_dir != NULL)
-            {
-                dmPath::Concat(log_dir, log_file_name, log_config_path, sizeof(log_config_path));
-                log_paths[count] = log_config_path;
-                count++;
-            }
-
-            char sys_path[DMPATH_MAX_PATH];
-            char main_log_path[DMPATH_MAX_PATH];
-            if (dmSys::GetLogPath(sys_path, sizeof(sys_path)) == dmSys::RESULT_OK)
-            {
-                dmPath::Concat(sys_path, log_file_name, main_log_path, sizeof(main_log_path));
-                log_paths[count] = main_log_path;
-                count++;
-            }
-
-            char application_support_path[DMPATH_MAX_PATH];
-            char application_support_log_path[DMPATH_MAX_PATH];
-            const char* logs_dir = dmConfigFile::GetString(engine->m_Config, "project.title_as_file_name", "defoldlogs");
-            if (dmSys::GetApplicationSupportPath(logs_dir, application_support_path, sizeof(application_support_path)) == dmSys::RESULT_OK)
-            {
-                dmPath::Concat(application_support_path, log_file_name, application_support_log_path, sizeof(application_support_log_path));
-                log_paths[count] = application_support_log_path;
-                count++;
-            }
-            for (uint32_t i = 0; i < count; ++i)
-            {
-                if (dmLog::SetLogFile(log_paths[i]))
-                {
-                    break;
-                }
-            }
-        }
-
-        const char* update_order = dmConfigFile::GetString(engine->m_Config, "gameobject.update_order", 0);
-
-        // This scope is mainly here to make sure the "Main" scope is created first
-        DM_PROFILE("Init");
-
-        char window_title[512];
-        const char* project_title = dmConfigFile::GetString(engine->m_Config, "project.title", "TestTitle");
-#if !defined(DM_RELEASE)
-        if (instance_index)
-        {
-            dmSnPrintf(window_title, sizeof(window_title), "%s - %d", project_title, instance_index);
-        }
-#endif
-
-        float clear_color_red = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_red", 0.0);
-        float clear_color_green = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_green", 0.0);
-        float clear_color_blue = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_blue", 0.0);
-        float clear_color_alpha = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_alpha", 0.0);
-        uint32_t clear_color = ((uint32_t)(clear_color_red * 255.0) & 0x000000ff)
-                             | (((uint32_t)(clear_color_green * 255.0) & 0x000000ff) << 8)
-                             | (((uint32_t)(clear_color_blue * 255.0) & 0x000000ff) << 16)
-                             | (((uint32_t)(clear_color_alpha * 255.0) & 0x000000ff) << 24);
-        engine->m_ClearColor = clear_color;
-
-        // Platform
-        engine->m_Width = dmConfigFile::GetInt(engine->m_Config, "display.width", 960);
-        engine->m_Height = dmConfigFile::GetInt(engine->m_Config, "display.height", 640);
-
-        dmPlatform::WindowParams window_params  = {};
-        window_params.m_ResizeCallback          = OnWindowResize;
-        window_params.m_ResizeCallbackUserData  = engine;
-        window_params.m_CloseCallback           = OnWindowClose;
-        window_params.m_CloseCallbackUserData   = engine;
-        window_params.m_FocusCallback           = OnWindowFocus;
-        window_params.m_FocusCallbackUserData   = engine;
-        window_params.m_IconifyCallback         = OnWindowIconify;
-        window_params.m_IconifyCallbackUserData = engine;
-        window_params.m_Width                   = engine->m_Width;
-        window_params.m_Height                  = engine->m_Height;
-        window_params.m_Samples                 = dmConfigFile::GetInt(engine->m_Config, "display.samples", 0);
-        window_params.m_Title                   = instance_index ? window_title : project_title;
-        window_params.m_Fullscreen              = (bool) dmConfigFile::GetInt(engine->m_Config, "display.fullscreen", 0);
-        window_params.m_HighDPI                 = (bool) dmConfigFile::GetInt(engine->m_Config, "display.high_dpi", 0);
-        window_params.m_BackgroundColor         = clear_color;
-        window_params.m_GraphicsApi             = AdapterFamilyToGraphicsAPI(dmGraphics::GetInstalledAdapterFamily());
-
-        engine->m_Window = dmPlatform::NewWindow();
-
-        dmPlatform::PlatformResult platform_result = dmPlatform::OpenWindow(engine->m_Window, window_params);
-        if (platform_result != dmPlatform::PLATFORM_RESULT_OK)
-        {
-            dmLogFatal("Could not open window (%d).", platform_result);
-            return false;
-        }
-
-        bool setting_vsync     = dmConfigFile::GetInt(engine->m_Config, "display.vsync", true); // Deprecated
         uint32_t swap_interval = dmConfigFile::GetInt(engine->m_Config, "display.swap_interval", 1);
-        if (!setting_vsync)
-        {
+        if (!dmConfigFile::GetInt(engine->m_Config, "display.vsync", true)) // Deprecated
             swap_interval = 0;
-        }
-
-        dmJobThread::JobThreadCreationParams job_thread_create_param;
-        job_thread_create_param.m_ThreadNames[0] = "DefoldJobThread1";
-        job_thread_create_param.m_ThreadCount    = 1;
-        engine->m_JobThreadContext               = dmJobThread::Create(job_thread_create_param);
-
-        dmGraphics::ContextParams graphics_context_params;
-        graphics_context_params.m_ReadyCallback           = OnGraphicsReady;
-        graphics_context_params.m_ReadyCallbackUserData   = engine;
-        graphics_context_params.m_DefaultTextureMinFilter = ConvertMinTextureFilter(dmConfigFile::GetString(engine->m_Config, "graphics.default_texture_min_filter", "linear"));
-        graphics_context_params.m_DefaultTextureMagFilter = ConvertMagTextureFilter(dmConfigFile::GetString(engine->m_Config, "graphics.default_texture_mag_filter", "linear"));
-        graphics_context_params.m_VerifyGraphicsCalls     = verify_graphics_calls;
-        graphics_context_params.m_RenderDocSupport        = renderdoc_support || dmConfigFile::GetInt(engine->m_Config, "graphics.use_renderdoc", 0) != 0;
-        graphics_context_params.m_UseValidationLayers     = use_validation_layers || dmConfigFile::GetInt(engine->m_Config, "graphics.use_validationlayers", 0) != 0;
-        graphics_context_params.m_GraphicsMemorySize      = dmConfigFile::GetInt(engine->m_Config, "graphics.memory_size", 0) * 1024*1024; // MB -> bytes
-        graphics_context_params.m_Window                  = engine->m_Window;
-        graphics_context_params.m_Width                   = engine->m_Width;
-        graphics_context_params.m_Height                  = engine->m_Height;
-        graphics_context_params.m_PrintDeviceInfo         = dmConfigFile::GetInt(engine->m_Config, "display.display_device_info", 0);
-        graphics_context_params.m_JobThread               = engine->m_JobThreadContext;
-        graphics_context_params.m_SwapInterval            = swap_interval;
-
-        if (!dmGraphics::NewContext(graphics_context_params))
-        {
-            dmLogFatal("Unable to create the graphics context.");
-            return false;
-        }
-
         SetSwapInterval(engine, swap_interval);
 
         uint32_t physical_dpi = dmGraphics::GetDisplayDpi(engine->m_GraphicsContext);
@@ -1008,12 +663,12 @@ namespace dmEngine
         params.m_ArchiveManifest.m_Size = BUILTINS_DMANIFEST_SIZE;
 #endif
 
-        const char* resource_uri = dmConfigFile::GetString(engine->m_Config, "resource.uri", project_file_uri);
+        const char* resource_uri = dmConfigFile::GetString(engine->m_Config, "resource.uri", engine->m_ProjectFileURI);
         dmLogInfo("Loading data from: %s", resource_uri);
         engine->m_Factory = dmResource::NewFactory(&params, resource_uri);
         if (!engine->m_Factory)
         {
-            return false;
+            return;
         }
 
         dmScript::ClearLuaRefCount(); // Reset the debug counter to 0
@@ -1068,7 +723,7 @@ namespace dmEngine
         if(go_result != dmGameObject::RESULT_OK)
         {
             dmLogFatal("Failed to set max instance count for collections (%d)", go_result);
-            return false;
+            return;
         }
         dmGameObject::SetInputStackDefaultCapacity(engine->m_Register, dmConfigFile::GetInt(engine->m_Config, dmGameObject::COLLECTION_MAX_INPUT_STACK_ENTRIES_KEY, dmGameObject::DEFAULT_MAX_INPUT_STACK_CAPACITY));
 
@@ -1114,7 +769,7 @@ namespace dmEngine
         // Any connected devices are registered here.
         dmHID::Init(engine->m_HidContext);
 
-        if (use_accelerometer)
+        if (dmConfigFile::GetInt(engine->m_Config, "input.use_accelerometer", 1))
         {
             dmHID::EnableAccelerometer(engine->m_HidContext); // Creates and enables the accelerometer
         }
@@ -1123,7 +778,7 @@ namespace dmEngine
         if (mr != dmMessage::RESULT_OK)
         {
             dmLogFatal("Unable to create system socket: %s (%d)", SYSTEM_SOCKET_NAME, mr);
-            return false;
+            return;
         }
 
         // rig.max_instance_count is deprecated in favour of component specific max count values.
@@ -1270,29 +925,29 @@ namespace dmEngine
 
         fact_result = dmResource::RegisterTypes(engine->m_Factory, &engine->m_ResourceTypeContexts);
         if (fact_result != dmResource::RESULT_OK)
-            goto bail;
+            return;
 
         fact_result = dmGameSystem::RegisterResourceTypes(engine->m_Factory, engine->m_RenderContext, engine->m_InputContext, &engine->m_PhysicsContext);
         if (fact_result != dmResource::RESULT_OK)
-            goto bail;
+            return;
 
         go_result = dmGameSystem::RegisterComponentTypes(engine->m_Factory, engine->m_Register, engine->m_RenderContext, &engine->m_PhysicsContext, &engine->m_ParticleFXContext, &engine->m_SpriteContext,
                                                                                                 &engine->m_CollectionProxyContext, &engine->m_FactoryContext, &engine->m_CollectionFactoryContext,
                                                                                                 &engine->m_ModelContext, &engine->m_LabelContext, &engine->m_TilemapContext,
                                                                                                 &engine->m_SoundContext);
         if (go_result != dmGameObject::RESULT_OK)
-            goto bail;
+            return;
 
         // register the component extensions
 
         go_result = dmGameObject::CreateRegisteredComponentTypes(&component_create_ctx);
         if (go_result != dmGameObject::RESULT_OK)
-            goto bail;
+            return;
 
         if (!LoadBootstrapContent(engine, engine->m_Config))
         {
             dmLogError("Unable to load bootstrap data.");
-            goto bail;
+            return;
         }
 
 #if !defined(DM_RELEASE)
@@ -1311,7 +966,7 @@ namespace dmEngine
                     if (r != dmResource::RESULT_OK) {
                         dmLogWarning("Failed to load script: %s (%d)", filename, r);
                         free(tmp);
-                        return false;
+                        return;
                     }
 
 
@@ -1321,7 +976,7 @@ namespace dmEngine
                         free(tmp);
                         free(data);
                         dmLogWarning("Failed to load LuaModule message from: %s (%d)", filename, r);
-                        return false;
+                        return;
                     }
 
                     // Due to the fact that the same message can be loaded in two different ways, we have two separate call sites
@@ -1365,7 +1020,7 @@ namespace dmEngine
             dmRender::RenderScriptResult script_result = InitRenderScriptInstance(engine->m_RenderScriptPrototype->m_Instance);
             if (script_result != dmRender::RENDER_SCRIPT_RESULT_OK) {
                 dmLogFatal("Render script could not be initialized.");
-                goto bail;
+                return;
             }
         }
 
@@ -1380,21 +1035,21 @@ namespace dmEngine
             script_lib_context.m_ScriptContext = engine->m_SharedScriptContext;
             script_lib_context.m_LuaState = dmScript::GetLuaState(engine->m_SharedScriptContext);
             if (!dmGameSystem::InitializeScriptLibs(script_lib_context))
-                goto bail;
+                return;
         } else {
             script_lib_context.m_ScriptContext = engine->m_GOScriptContext;
             script_lib_context.m_LuaState = dmScript::GetLuaState(engine->m_GOScriptContext);
             if (!dmGameSystem::InitializeScriptLibs(script_lib_context))
-                goto bail;
+                return;
             script_lib_context.m_ScriptContext = engine->m_GuiScriptContext;
             script_lib_context.m_LuaState = dmScript::GetLuaState(engine->m_GuiScriptContext);
             if (!dmGameSystem::InitializeScriptLibs(script_lib_context))
-                goto bail;
+                return;
         }
 
         fact_result = dmResource::Get(engine->m_Factory, dmConfigFile::GetString(engine->m_Config, "bootstrap.main_collection", "/logic/main.collectionc"), (void**) &engine->m_MainCollection);
         if (fact_result != dmResource::RESULT_OK)
-            goto bail;
+            return;
         dmGameObject::Init(engine->m_MainCollection);
 
         engine->m_LastReloadMTime = 0;
@@ -1417,6 +1072,7 @@ namespace dmEngine
 
         // Tbh, I have never heard of this feature of reordering the component types being utilized.
         // I vote for removing it. /MAWE
+        const char* update_order = dmConfigFile::GetString(engine->m_Config, "gameobject.update_order", 0);
         if (update_order)
         {
             char* tmp = strdup(update_order);
@@ -1480,11 +1136,351 @@ namespace dmEngine
         }
 
         engine->m_PreviousFrameTime = dmTime::GetTime();
+    }
+
+    /*
+     The game.projectc is located using the following scheme:
+
+     A.
+      1. If an argument is specified load the game.project from specified file
+     B.
+      1. Look for game.project (relative path)
+      2. Look for build/default/game.projectc (relative path)
+      3. Look for dmSys::GetResourcePath()/game.project
+      4. Load first game.project-file found. If none is
+         found start the built-in connect application
+
+      The content-root is set to the directory name of
+      the project if not overridden in project-file
+      (resource.uri)
+    */
+    bool Init(HEngine engine, int argc, char *argv[])
+    {
+        dmLogInfo("Defold Engine %s (%.7s)", dmEngineVersion::VERSION, dmEngineVersion::VERSION_SHA1);
+
+        dmCrash::SetExtraInfoCallback(CrashHandlerCallback, engine);
+
+        dmSys::EngineInfoParam engine_info;
+        engine_info.m_Platform = dmEngineVersion::PLATFORM;
+        engine_info.m_Version = dmEngineVersion::VERSION;
+        engine_info.m_VersionSHA1 = dmEngineVersion::VERSION_SHA1;
+        engine_info.m_IsDebug = dLib::IsDebugMode();
+        dmSys::SetEngineInfo(engine_info);
+
+        char* qoe_s = dmSys::GetEnv("DM_QUIT_ON_ESC");
+        engine->m_QuitOnEsc = ((qoe_s != 0x0) && (qoe_s[0] == '1'));
+
+        char project_file[DMPATH_MAX_PATH] = "";
+        char project_file_folder[DMPATH_MAX_PATH] = ".";
+        bool loaded_ok = false;
+
+        char resources_path[DMPATH_MAX_PATH];
+        dmSys::GetResourcesPath(argc, argv, resources_path, sizeof(resources_path));
+
+        if (GetProjectFile(argc, argv, resources_path, project_file, sizeof(project_file)))
+        {
+            dmConfigFile::Result cr = dmConfigFile::Load(project_file, argc, (const char**) argv, &engine->m_Config);
+            if (cr != dmConfigFile::RESULT_OK)
+            {
+                if (!engine->m_ConnectionAppMode)
+                {
+                    dmLogFatal("Unable to load project file: '%s' (%d)", project_file, cr);
+                    return false;
+                }
+                dmLogError("Unable to load project file: '%s' (%d)", project_file, cr);
+            }
+            else
+            {
+                loaded_ok = true;
+                dmPath::Dirname(project_file, project_file_folder, sizeof(project_file_folder));
+                dmStrlCpy(engine->m_ProjectFileURI, project_file_folder, sizeof(engine->m_ProjectFileURI));
+
+                char tmp[DMPATH_MAX_PATH];
+                dmStrlCpy(tmp, project_file_folder, sizeof(tmp));
+                if (project_file_folder[0])
+                {
+                    dmStrlCat(tmp, "/game.dmanifest", sizeof(tmp));
+                }
+                else
+                {
+                    dmStrlCat(tmp, "game.dmanifest", sizeof(tmp));
+                }
+                if (dmSys::ResourceExists(tmp))
+                {
+                    dmStrlCpy(engine->m_ProjectFileURI, "archive:", sizeof(engine->m_ProjectFileURI));
+                    dmStrlCat(engine->m_ProjectFileURI, tmp, sizeof(engine->m_ProjectFileURI));
+                }
+            }
+        }
+
+        if( !loaded_ok )
+        {
+#if defined(DM_RELEASE)
+            dmLogFatal("Unable to load project");
+            return false;
+#else
+            dmConfigFile::Result cr = dmConfigFile::LoadFromBuffer((const char*) GAME_PROJECT, GAME_PROJECT_SIZE, argc, (const char**) argv, &engine->m_Config);
+            if (cr != dmConfigFile::RESULT_OK)
+            {
+                dmLogFatal("Unable to load builtin connect project");
+                return false;
+            }
+            engine->m_ConnectionAppMode = true;
+#endif
+        }
+
+        // Try loading SSL keys
+        char engine_ssl_keys_path[DMPATH_MAX_PATH];
+        dmPath::Concat(resources_path, "/ssl_keys.pem", engine_ssl_keys_path, sizeof(engine_ssl_keys_path));
+        char editor_ssl_keys_path[DMPATH_MAX_PATH];
+        const char* custom_ssl_certificate = dmConfigFile::GetString(engine->m_Config, "network.ssl_certificates", 0);
+        if (custom_ssl_certificate != 0)
+        {
+            dmPath::Concat(project_file_folder, custom_ssl_certificate, editor_ssl_keys_path, sizeof(editor_ssl_keys_path));
+        }
+
+        const char* paths[] = {engine_ssl_keys_path, custom_ssl_certificate != 0 ? editor_ssl_keys_path : 0};
+        for (uint32_t i = 0; i < DM_ARRAY_SIZE(paths); ++i)
+        {
+            if (paths[i] && LoadAndSetSslKeys(paths[i]))
+            {
+                dmLogInfo("SSL verification enabled");
+                break;
+            }
+        }
+
+        // Set HTML5 console banner "MadeWithDefold"
+        #if defined(__EMSCRIPTEN__)
+        if (1 == dmConfigFile::GetInt(engine->m_Config, "html5.show_console_banner", 1))
+        {
+            EM_ASM({
+                if (navigator.userAgent.toLowerCase().indexOf('chrome') > -1) {
+                    console.log("%c    %c    Made with Defold    %c    %c    https://www.defold.com",
+                        "background: #fd6623; padding:5px 0; border: 5px;",
+                        "background: #272c31; color: #fafafa; padding:5px 0;",
+                        "background: #39a3e4; padding:5px 0;",
+                        "background: #ffffff; color: #000000; padding:5px 0;"
+                    );
+                }
+                else {
+                    console.log("Made with Defold -=[ https://www.defold.com ]=-");
+                }
+            });
+        }
+        #endif
+
+        // Catch engine specific arguments
+        bool verify_graphics_calls = dLib::IsDebugMode();
+
+        // The default is 1, and the only way to know if the property is manually set, is if it's 0
+        // since the values are always written to the project file
+        if (0 == dmConfigFile::GetInt(engine->m_Config, "graphics.verify_graphics_calls", 1))
+            verify_graphics_calls = false;
+
+        bool renderdoc_support = false;
+        bool use_validation_layers = false;
+        const char verify_graphics_calls_arg[] = "--verify-graphics-calls=";
+        const char renderdoc_support_arg[] = "--renderdoc";
+        const char validation_layers_support_arg[] = "--use-validation-layers";
+        const char verbose_long[] = "--verbose";
+        const char verbose_short[] = "-v";
+        for (int i = 0; i < argc; ++i)
+        {
+            const char* arg = argv[i];
+            if (strncmp(verify_graphics_calls_arg, arg, sizeof(verify_graphics_calls_arg)-1) == 0)
+            {
+                const char* eq = strchr(arg, '=');
+                if (strncmp("true", eq+1, sizeof("true")-1) == 0) {
+                    verify_graphics_calls = true;
+                } else if (strncmp("false", eq+1, sizeof("false")-1) == 0) {
+                    verify_graphics_calls = false;
+                } else {
+                    dmLogWarning("Invalid value used for %s%s.", verify_graphics_calls_arg, eq);
+                }
+            }
+            else if (strncmp(renderdoc_support_arg, arg, sizeof(renderdoc_support_arg)-1) == 0)
+            {
+                renderdoc_support = true;
+            }
+            else if (strncmp(validation_layers_support_arg, arg, sizeof(validation_layers_support_arg)-1) == 0)
+            {
+                use_validation_layers = true;
+            }
+            else if (strncmp(verbose_long, arg, sizeof(verbose_long)-1) == 0 ||
+                     strncmp(verbose_short, arg, sizeof(verbose_short)-1) == 0)
+            {
+                dmLogSetLevel(LOG_SEVERITY_DEBUG);
+            }
+        }
+
+        dmBuffer::NewContext();
+
+        dmHID::NewContextParams new_hid_params = dmHID::NewContextParams();
+
+        // Accelerometer
+        const int32_t use_accelerometer = dmConfigFile::GetInt(engine->m_Config, "input.use_accelerometer", 1);
+        new_hid_params.m_IgnoreAcceleration = use_accelerometer ? 0 : 1;
+
+#if defined(__EMSCRIPTEN__)
+        // DEF-2450 Reverse scroll direction for firefox browser
+        dmSys::SystemInfo info;
+        dmSys::GetSystemInfo(&info);
+        if (info.m_UserAgent != 0x0)
+        {
+            const char* str_firefox = "firefox";
+            new_hid_params.m_FlipScrollDirection = (strcasestr(info.m_UserAgent, str_firefox) != NULL) ? 1 : 0;
+        }
+#endif
+        engine->m_HidContext = dmHID::NewContext(new_hid_params);
+
+        dmEngine::ExtensionAppParams app_params;
+        app_params.m_ConfigFile = engine->m_Config;
+        app_params.m_WebServer = dmEngineService::GetWebServer(engine->m_EngineService);
+        app_params.m_GameObjectRegister = engine->m_Register;
+        app_params.m_HIDContext = engine->m_HidContext;
+
+        dmExtension::Result er = dmExtension::AppInitialize((dmExtension::AppParams*)&app_params);
+        if (er != dmExtension::RESULT_OK) {
+            dmLogFatal("Failed to initialize extensions (%d)", er);
+            return false;
+        }
+
+        int instance_index = 0;
+#if !defined(DM_RELEASE)
+        instance_index = dmConfigFile::GetInt(engine->m_Config, "project.instance_index", 0);
+#endif
+        int write_log = dmConfigFile::GetInt(engine->m_Config, "project.write_log", 0);
+        if (write_log) {
+            uint32_t count = 0;
+            char* log_paths[3];
+
+            char log_file_name[32] = "log.txt";
+            if (instance_index > 0)
+            {
+                dmSnPrintf(log_file_name, sizeof(log_file_name), "instance_%d_log.txt", instance_index);
+            }
+
+            const char* log_dir = dmConfigFile::GetString(engine->m_Config, "project.log_dir", NULL);
+            char log_config_path[DMPATH_MAX_PATH];
+            if (log_dir != NULL)
+            {
+                dmPath::Concat(log_dir, log_file_name, log_config_path, sizeof(log_config_path));
+                log_paths[count] = log_config_path;
+                count++;
+            }
+
+            char sys_path[DMPATH_MAX_PATH];
+            char main_log_path[DMPATH_MAX_PATH];
+            if (dmSys::GetLogPath(sys_path, sizeof(sys_path)) == dmSys::RESULT_OK)
+            {
+                dmPath::Concat(sys_path, log_file_name, main_log_path, sizeof(main_log_path));
+                log_paths[count] = main_log_path;
+                count++;
+            }
+
+            char application_support_path[DMPATH_MAX_PATH];
+            char application_support_log_path[DMPATH_MAX_PATH];
+            const char* logs_dir = dmConfigFile::GetString(engine->m_Config, "project.title_as_file_name", "defoldlogs");
+            if (dmSys::GetApplicationSupportPath(logs_dir, application_support_path, sizeof(application_support_path)) == dmSys::RESULT_OK)
+            {
+                dmPath::Concat(application_support_path, log_file_name, application_support_log_path, sizeof(application_support_log_path));
+                log_paths[count] = application_support_log_path;
+                count++;
+            }
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                if (dmLog::SetLogFile(log_paths[i]))
+                {
+                    break;
+                }
+            }
+        }
+
+        // This scope is mainly here to make sure the "Main" scope is created first
+        DM_PROFILE("Init");
+
+        char window_title[512];
+        const char* project_title = dmConfigFile::GetString(engine->m_Config, "project.title", "TestTitle");
+#if !defined(DM_RELEASE)
+        if (instance_index)
+        {
+            dmSnPrintf(window_title, sizeof(window_title), "%s - %d", project_title, instance_index);
+        }
+#endif
+
+        float clear_color_red = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_red", 0.0);
+        float clear_color_green = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_green", 0.0);
+        float clear_color_blue = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_blue", 0.0);
+        float clear_color_alpha = dmConfigFile::GetFloat(engine->m_Config, "render.clear_color_alpha", 0.0);
+        uint32_t clear_color = ((uint32_t)(clear_color_red * 255.0) & 0x000000ff)
+                             | (((uint32_t)(clear_color_green * 255.0) & 0x000000ff) << 8)
+                             | (((uint32_t)(clear_color_blue * 255.0) & 0x000000ff) << 16)
+                             | (((uint32_t)(clear_color_alpha * 255.0) & 0x000000ff) << 24);
+        engine->m_ClearColor = clear_color;
+
+        // Platform
+        engine->m_Width = dmConfigFile::GetInt(engine->m_Config, "display.width", 960);
+        engine->m_Height = dmConfigFile::GetInt(engine->m_Config, "display.height", 640);
+
+        dmPlatform::WindowParams window_params  = {};
+        window_params.m_ResizeCallback          = OnWindowResize;
+        window_params.m_ResizeCallbackUserData  = engine;
+        window_params.m_CloseCallback           = OnWindowClose;
+        window_params.m_CloseCallbackUserData   = engine;
+        window_params.m_FocusCallback           = OnWindowFocus;
+        window_params.m_FocusCallbackUserData   = engine;
+        window_params.m_IconifyCallback         = OnWindowIconify;
+        window_params.m_IconifyCallbackUserData = engine;
+        window_params.m_Width                   = engine->m_Width;
+        window_params.m_Height                  = engine->m_Height;
+        window_params.m_Samples                 = dmConfigFile::GetInt(engine->m_Config, "display.samples", 0);
+        window_params.m_Title                   = instance_index ? window_title : project_title;
+        window_params.m_Fullscreen              = (bool) dmConfigFile::GetInt(engine->m_Config, "display.fullscreen", 0);
+        window_params.m_HighDPI                 = (bool) dmConfigFile::GetInt(engine->m_Config, "display.high_dpi", 0);
+        window_params.m_BackgroundColor         = clear_color;
+        window_params.m_GraphicsApi             = AdapterFamilyToGraphicsAPI(dmGraphics::GetInstalledAdapterFamily());
+
+        engine->m_Window = dmPlatform::NewWindow();
+
+        dmPlatform::PlatformResult platform_result = dmPlatform::OpenWindow(engine->m_Window, window_params);
+        if (platform_result != dmPlatform::PLATFORM_RESULT_OK)
+        {
+            dmLogFatal("Could not open window (%d).", platform_result);
+            return false;
+        }
+
+        uint32_t swap_interval = dmConfigFile::GetInt(engine->m_Config, "display.swap_interval", 1);
+        if (!dmConfigFile::GetInt(engine->m_Config, "display.vsync", true)) // Deprecated
+            swap_interval = 0;
+
+        dmJobThread::JobThreadCreationParams job_thread_create_param;
+        job_thread_create_param.m_ThreadNames[0] = "DefoldJobThread1";
+        job_thread_create_param.m_ThreadCount    = 1;
+        engine->m_JobThreadContext               = dmJobThread::Create(job_thread_create_param);
+
+        dmGraphics::ContextParams graphics_context_params;
+        graphics_context_params.m_ReadyCallback           = OnGraphicsReady;
+        graphics_context_params.m_ReadyCallbackUserData   = engine;
+        graphics_context_params.m_DefaultTextureMinFilter = ConvertMinTextureFilter(dmConfigFile::GetString(engine->m_Config, "graphics.default_texture_min_filter", "linear"));
+        graphics_context_params.m_DefaultTextureMagFilter = ConvertMagTextureFilter(dmConfigFile::GetString(engine->m_Config, "graphics.default_texture_mag_filter", "linear"));
+        graphics_context_params.m_VerifyGraphicsCalls     = verify_graphics_calls;
+        graphics_context_params.m_RenderDocSupport        = renderdoc_support || dmConfigFile::GetInt(engine->m_Config, "graphics.use_renderdoc", 0) != 0;
+        graphics_context_params.m_UseValidationLayers     = use_validation_layers || dmConfigFile::GetInt(engine->m_Config, "graphics.use_validationlayers", 0) != 0;
+        graphics_context_params.m_GraphicsMemorySize      = dmConfigFile::GetInt(engine->m_Config, "graphics.memory_size", 0) * 1024*1024; // MB -> bytes
+        graphics_context_params.m_Window                  = engine->m_Window;
+        graphics_context_params.m_Width                   = engine->m_Width;
+        graphics_context_params.m_Height                  = engine->m_Height;
+        graphics_context_params.m_PrintDeviceInfo         = dmConfigFile::GetInt(engine->m_Config, "display.display_device_info", 0);
+        graphics_context_params.m_JobThread               = engine->m_JobThreadContext;
+        graphics_context_params.m_SwapInterval            = swap_interval;
+
+        if (!dmGraphics::NewContext(graphics_context_params))
+        {
+            dmLogFatal("Unable to create the graphics context.");
+            return false;
+        }
 
         return true;
-
-bail:
-        return false;
     }
 
     static void GOActionCallback(dmhash_t action_id, dmInput::Action* action, void* user_data)

@@ -803,7 +803,7 @@ bool WebGPUContext::initialize(const ContextParams& params)
 
     m_Instance = wgpuCreateInstance(nullptr);
     wgpuInstanceRequestAdapter(m_Instance, NULL, instanceRequestAdapterCallback, this);
-#if defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__) && 0
     while (!m_InitComplete)
         emscripten_sleep(100);
 #endif
