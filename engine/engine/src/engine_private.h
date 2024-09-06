@@ -20,6 +20,7 @@
 #include <dmsdk/dlib/configfile.h>
 #include <dlib/hashtable.h>
 #include <dlib/message.h>
+#include <dlib/path.h>
 
 #include <resource/resource.h>
 
@@ -120,6 +121,7 @@ namespace dmEngine
 
         float                                       m_MouseSensitivity;
 
+        char                                        m_ProjectFileURI[DMPATH_MAX_PATH];
         dmJobThread::HContext                       m_JobThreadContext;
         dmGraphics::HContext                        m_GraphicsContext;
         dmRender::HRenderContext                    m_RenderContext;

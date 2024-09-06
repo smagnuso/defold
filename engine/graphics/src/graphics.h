@@ -51,6 +51,8 @@ namespace dmGraphics
      */
     typedef int32_t (*WindowIsRunning)(void* user_data);
 
+    typedef void (*GraphicsReadyCallback)(void* user_data, HContext graphics);
+
     // See documentation in engine.h
     typedef void (*EngineInit)(void* ctx);
     typedef void (*EngineExit)(void* ctx);
@@ -269,6 +271,8 @@ namespace dmGraphics
 
         dmPlatform::HWindow   m_Window;
         dmJobThread::HContext m_JobThread;
+        GraphicsReadyCallback m_ReadyCallback;
+        void*                 m_ReadyCallbackUserData;
         TextureFilter         m_DefaultTextureMinFilter;
         TextureFilter         m_DefaultTextureMagFilter;
         uint32_t              m_Width;
@@ -366,6 +370,11 @@ namespace dmGraphics
     bool InstallAdapter(AdapterFamily family = ADAPTER_FAMILY_NONE);
     AdapterFamily GetAdapterFamily(const char* adapter_name);
     AdapterFamily GetInstalledAdapterFamily();
+
+    /**
+     * Indicates if context is ready
+     */
+    bool IsReady(HContext context);
 
     /**
      * Finalize graphics system

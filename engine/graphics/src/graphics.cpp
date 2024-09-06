@@ -277,7 +277,10 @@ namespace dmGraphics
 
     HContext NewContext(const ContextParams& params)
     {
-        return g_functions.m_NewContext(params);
+        HContext context = g_functions.m_NewContext(params);
+        if(params.m_ReadyCallback && IsReady(context))
+            params.m_ReadyCallback(params.m_ReadyCallbackUserData, context);
+        return context;
     }
 
     HContext GetInstalledContext()
@@ -1179,6 +1182,13 @@ namespace dmGraphics
         if (g_functions.m_Finalize)
             g_functions.m_Finalize();
     }
+
+     bool IsReady(HContext context)
+     {
+         if (g_functions.m_IsReady)
+             return g_functions.m_IsReady(context);
+         return true;
+     }
 
     ///////////////////////////////////////////////////
     ////// PLATFORM / WINDOWS SPECIFIC FUNCTIONS //////

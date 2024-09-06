@@ -49,6 +49,7 @@ namespace dmGraphics
     typedef HContext (*NewContextFn)(const ContextParams& params);
     typedef void (*DeleteContextFn)(HContext context);
     typedef void (*FinalizeFn)();
+    typedef bool (*IsReadyFn)(HContext);
     typedef void (*AppBootstrapFn)(int argc, char** argv, EngineCreate create_fn, EngineDestroy destroy_fn, EngineUpdate update_fn, EngineGetResult result_fn);
     typedef void (*CloseWindowFn)(HContext context);
     typedef dmPlatform::HWindow (*GetWindowFn)(HContext context);
@@ -167,6 +168,7 @@ namespace dmGraphics
     {
         NewContextFn m_NewContext;
         DeleteContextFn m_DeleteContext;
+        IsReadyFn m_IsReady;
         FinalizeFn m_Finalize;
         CloseWindowFn m_CloseWindow;
         GetWindowFn m_GetWindow;
@@ -286,6 +288,7 @@ namespace dmGraphics
         DM_REGISTER_GRAPHICS_FUNCTION(tbl, adapter_name, NewContext); \
         DM_REGISTER_GRAPHICS_FUNCTION(tbl, adapter_name, DeleteContext); \
         DM_REGISTER_GRAPHICS_FUNCTION(tbl, adapter_name, Finalize); \
+        DM_REGISTER_GRAPHICS_FUNCTION(tbl, adapter_name, IsReady); \
         DM_REGISTER_GRAPHICS_FUNCTION(tbl, adapter_name, CloseWindow); \
         DM_REGISTER_GRAPHICS_FUNCTION(tbl, adapter_name, GetWindow); \
         DM_REGISTER_GRAPHICS_FUNCTION(tbl, adapter_name, GetDisplayDpi); \

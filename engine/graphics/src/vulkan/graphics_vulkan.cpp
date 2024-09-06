@@ -1238,6 +1238,11 @@ bail:
         NativeExit();
     }
 
+    static bool VulkanIsReady()
+    {
+        return true;
+    }
+
     static void VulkanGetDefaultTextureFilters(HContext _context, TextureFilter& out_min_filter, TextureFilter& out_mag_filter)
     {
         VulkanContext* context = (VulkanContext*) _context;

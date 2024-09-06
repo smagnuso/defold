@@ -672,6 +672,11 @@ static void LogFrameBufferError(GLenum status)
     {
     }
 
+    static bool OpenGLIsReady(HContext)
+    {
+        return true;
+    }
+
     static void StoreExtensions(HContext _context, const GLubyte* _extensions)
     {
         OpenGLContext* context = (OpenGLContext*) _context;

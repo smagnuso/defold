@@ -600,6 +600,17 @@ namespace dmEngine
         return (dmPlatform::PlatformGraphicsApi) -1;
     }
 
+    static void OnGraphicsReady(void* user_data, dmGraphics::HContext graphicsContext)
+    {
+        printf("OnGraphicsReady\n");
+        Engine* engine = (Engine*)user_data;
+        if(engine->m_GraphicsContext) {
+            assert(engine->m_GraphicsContext == graphicsContext);
+            return;
+        }
+        engine->m_GraphicsContext = graphicsContext;
+    }
+
     /*
      The game.projectc is located using the following scheme:
 
@@ -927,6 +938,8 @@ namespace dmEngine
         engine->m_JobThreadContext               = dmJobThread::Create(job_thread_create_param);
 
         dmGraphics::ContextParams graphics_context_params;
+        graphics_context_params.m_ReadyCallback           = OnGraphicsReady;
+        graphics_context_params.m_ReadyCallbackUserData   = engine;
         graphics_context_params.m_DefaultTextureMinFilter = ConvertMinTextureFilter(dmConfigFile::GetString(engine->m_Config, "graphics.default_texture_min_filter", "linear"));
         graphics_context_params.m_DefaultTextureMagFilter = ConvertMagTextureFilter(dmConfigFile::GetString(engine->m_Config, "graphics.default_texture_mag_filter", "linear"));
         graphics_context_params.m_VerifyGraphicsCalls     = verify_graphics_calls;
@@ -940,8 +953,7 @@ namespace dmEngine
         graphics_context_params.m_JobThread               = engine->m_JobThreadContext;
         graphics_context_params.m_SwapInterval            = swap_interval;
 
-        engine->m_GraphicsContext = dmGraphics::NewContext(graphics_context_params);
-        if (engine->m_GraphicsContext == 0x0)
+        if (!dmGraphics::NewContext(graphics_context_params))
         {
             dmLogFatal("Unable to create the graphics context.");
             return false;

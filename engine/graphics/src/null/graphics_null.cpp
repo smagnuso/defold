@@ -89,6 +89,11 @@ namespace dmGraphics
         // nop
     }
 
+    static bool NullIsReady(HContext)
+    {
+        return true;
+    }
+
     NullContext::NullContext(const ContextParams& params)
     {
         memset(this, 0, sizeof(*this));

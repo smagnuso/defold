@@ -927,6 +927,12 @@ static void WebGPUFinalize()
 {
 }
 
+static bool WebGPUIsReady(HContext _context)
+{
+    WebGPUContext* context = (WebGPUContext*) _context;
+    return context->m_InitComplete;
+}
+
 static void WebGPUDeleteContext(HContext _context)
 {
     TRACE_CALL;
